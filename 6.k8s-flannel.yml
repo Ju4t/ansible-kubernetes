@@ -1,0 +1,11 @@
+---
+- hosts:
+    - kube_master_init
+  gather_facts: no
+  tasks:
+    - name: Copy kube-flannel
+      copy:
+        src: ./k8s-plugin/kube-flannel.yaml
+        dest: ~/k8s/kube-flannel.yaml
+    - name: 应用 flannel
+      shell: kubectl apply -f ~/k8s/kube-flannel.yaml

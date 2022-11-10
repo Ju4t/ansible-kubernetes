@@ -1,0 +1,135 @@
+---
+- hosts:
+    - kube_master
+  gather_facts: no
+  vars:
+    - KUBERNETES_PORT: 6443
+    - PRIORITY: 100
+    - STATE: MASTER
+    - INTERFACE: eth0
+    - AUTH_PASS: 1111
+  tasks:
+    - name: 安装 keepalived
+      yum:
+        name: keepalived
+
+    - name: 配置 check_apiserver
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/keepalived/check_apiserver.sh
+          #!/bin/sh
+
+          errorExit() {
+            echo "*** $*" 1>&2
+            exit 1
+          }
+
+          curl --silent --max-time 2 --insecure https://localhost:{{ KUBERNETES_PORT }}/ -o /dev/null || errorExit "Error GET https://localhost:{{ KUBERNETES_PORT }}/"
+          if ip addr | grep -q {{ KUBERNETES_VIP }}; then
+            curl --silent --max-time 2 --insecure https://{{ KUBERNETES_VIP }}:{{ KUBERNETES_PORT }}/ -o /dev/null || errorExit "Error GET https://{{ KUBERNETES_VIP }}:{{ KUBERNETES_PORT }}/"
+          fi
+          EOF
+    - name: 配置 keepalived(MASTER)
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/keepalived/keepalived.conf
+          ! Configuration File for keepalived
+          global_defs {
+            router_id LVS_DEVEL
+          }
+
+          vrrp_script check_apiserver {
+            script "/etc/keepalived/check_apiserver.sh"
+            interval 3
+            weight -2
+            fall 10
+            rise 2
+          }
+
+          vrrp_instance VIP {
+            interface {{ INTERFACE }} # 网卡名字
+            virtual_router_id 50 # 对于所有集群主机应该是相同的，keepalived而在同一子网中的所有集群中是唯一的。许多发行版将其值预配置为51
+            state {{ STATE }} # 备用
+            priority {{ PRIORITY }}  # 权重
+            advert_int 1
+            authentication {
+              auth_type PASS
+              auth_pass {{ AUTH_PASS }}
+            }
+            virtual_ipaddress {
+              {{ KUBERNETES_VIP }} #VIP
+            }
+            track_script {
+              check_apiserver
+            }
+          }
+          EOF
+    - name: 启动 keepalived
+      shell: service keepalived start && systemctl enable keepalived
+
+- hosts: kube_backup
+  vars:
+#    - KUBERNETES_VIP: 192.168.8.60
+    - KUBERNETES_PORT: 6443
+    - PRIORITY: 80
+    - STATE: BACKUP
+    - INTERFACE: eth0
+    - AUTH_PASS: 1111
+  tasks:
+    - name: 安装 keepalived
+      yum:
+        name: keepalived
+
+    - name: 配置 check_apiserver
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/keepalived/check_apiserver.sh
+          #!/bin/sh
+
+          errorExit() {
+            echo "*** $*" 1>&2
+            exit 1
+          }
+
+          curl --silent --max-time 2 --insecure https://localhost:{{ KUBERNETES_PORT }}/ -o /dev/null || errorExit "Error GET https://localhost:{{ KUBERNETES_PORT }}/"
+          if ip addr | grep -q {{ KUBERNETES_VIP }}; then
+              curl --silent --max-time 2 --insecure https://{{ KUBERNETES_VIP }}:{{ KUBERNETES_PORT }}/ -o /dev/null || errorExit "Error GET https://{{ KUBERNETES_VIP }}:{{ KUBERNETES_PORT }}/"
+          fi
+          EOF
+    - name: 配置 keepalived(BACKUP)
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/keepalived/keepalived.conf
+          ! Configuration File for keepalived
+          global_defs {
+            router_id LVS_DEVEL
+          }
+
+          vrrp_script check_apiserver {
+            script "/etc/keepalived/check_apiserver.sh"
+            interval 3
+            weight -2
+            fall 10
+            rise 2
+          }
+
+          vrrp_instance VIP {
+            interface {{ INTERFACE }} # 网卡名字
+            virtual_router_id 50
+            state {{ STATE }} # 备用
+            priority {{ PRIORITY }}  # 权重
+            advert_int 1
+            authentication {
+              auth_type PASS
+              auth_pass {{ AUTH_PASS }}
+            }
+            virtual_ipaddress {
+              {{ KUBERNETES_VIP }} # VIP
+            }
+            track_script {
+              check_apiserver
+            }
+          }
+          EOF
+    - name: 启动 keepalived
+      shell: service keepalived start && systemctl enable keepalived

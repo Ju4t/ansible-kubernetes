@@ -1,0 +1,29 @@
+---
+- hosts:
+    - kube_master_init
+  gather_facts: yes
+  tasks:
+    - name: k8s check
+      shell: |
+        if [ ! -d ~/k8s ] ; then mkdir ~/k8s ; fi
+    - name: kubeadm init
+      shell: |
+        kubeadm init \
+        --control-plane-endpoint k8s-master:6443 \
+        --image-repository registry.aliyuncs.com/google_containers \
+        --cri-socket=/run/containerd/containerd.sock \
+        --kubernetes-version={{ KUBERNETES_VER }} \
+        --service-dns-domain="cluster.local" \
+        --service-cidr=10.96.0.0/12 \
+        --pod-network-cidr=10.244.0.0/16 \
+        --upload-certs | tee ~/k8s/kubeadm-init.log
+    - name: kube config
+      shell: |
+         mkdir -p $HOME/.kube
+         sudo \cp /etc/kubernetes/admin.conf $HOME/.kube/config
+         sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+#      when:
+#        - hostname.find("master01") > -1
+
+# kubeadm init 参考：https://kubernetes.io/zh/docs/reference/setup-tools/kubeadm/kubeadm-init/

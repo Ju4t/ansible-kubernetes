@@ -1,0 +1,173 @@
+---
+- hosts:
+    - kube_master
+    - kube_worker
+#    - kube_new
+  gather_facts: no
+#  vars:
+#    - APISERVER_VIP: 192.168.8.80
+#    - docker_version: 20.10.12
+  tasks:
+    - name: 修改主机名
+      shell: |
+        hostnamectl set-hostname {{ hostname }}
+    - name: 关闭交换区
+      shell: swapoff -a && sed -ri 's/.*swap.*/#&/' /etc/fstab
+    - name: 临时关闭 SELINUX
+      shell: /sbin/setenforce 0
+      ignore_errors: True
+    - name: 永久关闭 SELINUX
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: SELINUX=permissive
+    - name: 关闭防火墙
+      service:
+        name: firewalld
+        state: stopped
+        enabled: no
+    - name: 删除冲突包
+      shell: |
+        yum remove -y podman docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-selinux docker-engine-selinux docker-engine containerd.io
+      ignore_errors: True
+
+    - name: 关闭系统不需要的服务
+      shell: systemctl stop postfix && systemctl disable postfix
+
+    - name: 生成 hosts
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/hosts
+          {{ KUBERNETES_VIP }} k8s-master   # Keepalived VIP
+          192.168.8.61 k8s-master01
+          192.168.8.62 k8s-master02
+          192.168.8.63 k8s-master03
+          192.168.8.71 k8s-worker01
+          192.168.8.72 k8s-worker02
+          192.168.8.73 k8s-worker03
+          192.168.8.80 cr.labdoc.cc
+          EOF
+
+    - name: IPVS 安装和配置的先决条件
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/sysconfig/modules/ipvs.modules
+          #!/bin/bash
+          modprobe -- ip_vs
+          modprobe -- ip_vs_rr
+          modprobe -- ip_vs_wrr
+          modprobe -- ip_vs_sh
+          modprobe -- nf_conntrack
+          EOF
+    - name: IPVS 设置生效
+      shell: chmod 755 /etc/sysconfig/modules/ipvs.modules && bash /etc/sysconfig/modules/ipvs.modules
+      ignore_errors: True
+
+    - name: Containerd 安装和配置的先决条件
+      shell:
+        cmd: |
+          cat <<EOF | sudo tee /etc/modules-load.d/containerd.conf
+          overlay
+          br_netfilter
+          EOF
+    - name: Containerd 设置生效
+      shell: sudo modprobe overlay && sudo modprobe br_netfilter
+
+    - name: kubernetes 安装和配置的先决条件
+      shell:
+        cmd: |
+          cat <<EOF > /etc/sysctl.d/kubernetes.conf
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.ipv4.ip_forward                 = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          EOF
+    - name: kubernetes 设置生效
+      shell: sysctl -p /etc/sysctl.d/kubernetes.conf
+      ignore_errors: True
+
+    - name: 安装 yum-utils ipset ipvsadm device-mapper-persistent-data lvm2 net-tools openssh-clients ntpdate
+      yum:
+        name: "{{ packages }}"
+      vars:
+        packages:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+          - ipset
+          - ipvsadm
+          - net-tools
+          - ntpdate
+          - openssh-clients
+
+    - name: 同步时间
+      shell: ntpdate time.windows.com
+      ignore_errors: True
+
+    - name: 添加 CentOS 7 阿里云 yum 源
+      shell: yum-config-manager --add-repo https://mirrors.aliyun.com/repo/Centos-7.repo
+
+    - name: 添加 Docker-CE 阿里云 yum 源
+      shell: yum-config-manager --add-repo https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+
+    - name: 添加 kubernetes 阿里云 yum 源
+      shell:
+        cmd: |
+          cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+          [kubernetes]
+          name=Kubernetes
+          baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+          enabled=1
+          gpgcheck=0
+          repo_gpgcheck=0
+          gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+          EOF
+
+# v1.24 弃用 dockershim
+#    - name: 安装 Docker
+#      yum:
+#        name: docker
+#    - name: 配置 docker
+#      shell: if [ ! -d /etc/docker ] ; then mkdir /etc/docker ; fi
+#    - name: 配置 docker
+#      shell:
+#        cmd: |
+#          cat <<EOF | sudo tee /etc/docker/daemon.json
+#          {
+#           "exec-opts": ["native.cgroupdriver=systemd"],
+#           "log-driver": "json-file",
+#           "log-opts": {
+#               "max-size": "100m"
+#           },
+#           "registry-mirrors" : ["https://5g2xk4rj.mirror.aliyuncs.com", "https://docker.mirrors.ustc.edu.cn", "http://hub-mirror.c.163.com"]
+#          }
+#          EOF
+#    - name: 配置 docker.service.d
+#      shell: mkdir -p /etc/systemd/system/docker.service.d
+#    - name: 启动 docker
+#      shell: systemctl daemon-reload && systemctl restart docker && systemctl enable docker
+
+    - name: 安装 containerd kubeadm kubectl kubelet
+      yum:
+        name:
+          - containerd
+          - kubeadm
+          - kubectl
+          - kubelet
+
+    - name: 配置 containerd
+      shell:
+        cmd: |
+          mkdir -p /etc/containerd \
+          && containerd config default > /etc/containerd/config.toml \
+          && sed -i "s#k8s.gcr.io#registry.aliyuncs.com/google_containers#g"  /etc/containerd/config.toml \
+          && sed -i "s#registry.k8s.io#registry.aliyuncs.com/google_containers#g" /etc/containerd/config.toml \
+          && sed -i "s#https://registry-1.docker.io#https://registry.aliyuncs.com#g"  /etc/containerd/config.toml
+
+    - name: 启动 Containerd
+      shell: systemctl daemon-reload && systemctl restart containerd && systemctl enable containerd
+
+    - name: 启动 kubelet
+      shell: systemctl enable kubelet && systemctl start kubelet
+
+    - name: 配置 crictl runtime
+      shell: crictl config runtime-endpoint unix:///run/containerd/containerd.sock

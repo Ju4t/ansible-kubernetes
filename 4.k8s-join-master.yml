@@ -1,0 +1,27 @@
+---
+# init 完后，更换 jion 密钥
+# k8s-master01 # cat k8s/kubeadm-init.log
+- hosts:
+    - kube_master_backup
+  gather_facts: no
+  tasks:
+    - name: 停用 keepalived
+      shell: service keepalived stop
+      ignore_errors: True
+
+    - name: kubeadm reset
+      shell: kubeadm reset -f
+    - name: kubeadm jion
+      shell: |
+        kubeadm join k8s-master:6443 --token 63w8sl.32anzcb6feoa32su \
+        	--discovery-token-ca-cert-hash sha256:7c1c8a433411a4c978f7a9aa23eaab2fee6f2df837ecffad4807b0752c2498d9 \
+        	--control-plane --certificate-key 1b2b41aa5ed408b1d234d6558976e2c0829e4c76e1affcaff9bd8d388cae685b
+    - name: kube config
+      shell: |
+         mkdir -p $HOME/.kube
+         sudo \cp /etc/kubernetes/admin.conf $HOME/.kube/config
+         sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+    - name: 启动 keepalived
+      shell: service keepalived start
+      ignore_errors: True

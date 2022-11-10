@@ -1,0 +1,15 @@
+---
+- hosts:
+    - kube_worker
+    # - kube_new
+  gather_facts: no
+  tasks:
+    - name: kubeadm reset
+      shell: |
+        kubeadm reset -f
+    - name: kubeadm jion
+      shell: |
+        kubeadm join k8s-master:6443 --token 63w8sl.32anzcb6feoa32su \
+        	--discovery-token-ca-cert-hash sha256:7c1c8a433411a4c978f7a9aa23eaab2fee6f2df837ecffad4807b0752c2498d9
+#      when:
+#        - hostname.find("master01") == -1

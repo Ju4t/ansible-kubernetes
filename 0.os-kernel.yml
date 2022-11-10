@@ -1,0 +1,27 @@
+---
+# 升级内核
+- hosts:
+    - kube_master
+    - kube_worker
+    - kube_new
+  gather_facts: no
+  tasks:
+    - name: 导入elrepo gpg key
+      shell: rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+
+    - name: 安装elrepo yum仓库
+      shell: yum -y install https://www.elrepo.org/elrepo-release-7.0-4.el7.elrepo.noarch.rpm
+
+    - name: 安装kernel-ml版本，ml为长期稳定版本，lt为长期维护版本
+      shell: yum -y install kernel-ml.x86_64 --enablerepo="elrepo-kernel"
+
+    - name: 设置grub2默认引导为0
+      shell: grub2-set-default 0 && grub2-mkconfig -o /boot/grub2/grub.cfg
+
+    - name: 重启
+      shell: reboot
+      ignore_errors: True
+      # shell: uname -r  # 检查版本
+
+#    - name: 升级系统软件
+#      shell: yum update -y

@@ -1,0 +1,9 @@
+---
+- hosts:
+    - kube_master
+    - kube_backup
+    - kube_worker
+  gather_facts: no
+  tasks:
+    - name: kubeadm reset
+      shell: kubeadm reset -f
